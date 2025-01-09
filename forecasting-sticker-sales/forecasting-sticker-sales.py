@@ -2,10 +2,6 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.utils.data as data
 
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_percentage_error
@@ -19,11 +15,10 @@ pd.set_option('display.max_columns', None)
 target = "num_sold"
 random_state = 42
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
-
 train_df = pd.read_csv("train.csv")
 train_df = train_df.drop("id", axis=1)
 
+# Getting some basic info about the data
 print("=" * 30)
 print(train_df.info())
 print("=" * 30)
@@ -34,52 +29,100 @@ for col in train_df:
     print(col)
     print(train_df[col].value_counts())
 
-# plt.figure(figsize=(20, 16))
-
-# sns.heatmap(train_df.isna(), cbar=False, yticklabels=False)
-# plt.title("Plot of missing values")
-
-# plt.show()
-
 cat_cols = train_df.select_dtypes(include="object").columns.tolist()
 cat_cols.remove("date")
 
-# colors = sns.color_palette("tab10", len(cat_cols))
+colors = sns.color_palette("tab10")
 
-# fig, axes = plt.subplots(
-#     nrows=3,
-#     ncols=1,
-#     figsize=(10 * len(cat_cols), 10)
-# )
+fig, axes = plt.subplots(
+    nrows=len(cat_cols),
+    ncols=1,
+    figsize=(10, 10 * len(cat_cols))
+)
 
-# for i, col in enumerate(cat_cols):
-#     sns.countplot(
-#         data=train_df,
-#         x=col,
-#         ax=axes[i],
-#         color=colors[i]
-#     )
+for i, col in enumerate(cat_cols):
+    sns.countplot(
+        data=train_df,
+        x=col,
+        ax=axes[i],
+        color=colors[i]
+    )
 
-# plt.show()
+plt.tight_layout()
+plt.savefig("images/cat_data.jpeg", dpi=300)
+plt.show()
 
-# plt.figure(figsize=(20, 16))
+plt.figure(figsize=(20, 16))
 
-# sns.histplot(
-#     data=train_df,
-#     x=target,
-#     color=colors[0],
-#     kde=True
-# )
+sns.histplot(
+    data=train_df,
+    x=target,
+    color=colors[0],
+    kde=True
+)
 
-# plt.show()
+plt.savefig("images/num_sold.jpeg", dpi=300)
+plt.show()
+
+# Checking for missing data
+plt.figure(figsize=(20, 16))
+
+sns.heatmap(train_df.isna(), cbar=False, yticklabels=False)
+plt.title("Plot of missing values")
+
+plt.savefig("images/missing_values.jpeg", dpi=300)
+plt.show()
+
+# The target data has missing values
+num_sold_groups = train_df.groupby(cat_cols)[target].count().reset_index()
+num_sold_groups = num_sold_groups.pivot_table(
+    index="country",
+    columns="product",
+    values="num_sold",
+    aggfunc="sum"
+)
+
+plt.figure(figsize=(20, 16))
+
+sns.heatmap(num_sold_groups, annot=True, fmt=".0f")
+
+plt.savefig("images/num_sold_heatmap.jpeg", dpi=300)
+plt.show()
+
+train_df["date"] = pd.to_datetime(
+    train_df["date"],
+    format="ISO8601"
+)
+
+countries = train_df["country"].unique()
+
+ncols = 2
+nrows = (len(countries) + ncols - 1) // ncols
+
+fig, axes = plt.subplots(
+    nrows=nrows,
+    ncols=ncols,
+    figsize=(20, 10 * nrows)
+)
+
+axes = axes.flatten()
+
+for i, country in enumerate(countries):
+    sns.lineplot(
+        train_df.loc[train_df["country"] == country],
+        x="date",
+        y=target,
+        ax=axes[i],
+        color=colors[i]
+    )
+    print(country)
+
+plt.tight_layout()
+plt.savefig("images/country_lineplot.jpeg", dpi=300)
+plt.show()
 
 
 def date(df):
-    df["date"] = pd.to_datetime(
-        df["date"],
-        format="ISO8601"
-    )
-
     df["date_int"] = train_df["date"].astype(np.int64) / 10**9
 
     df['Year'] = df['date'].dt.year
@@ -99,7 +142,7 @@ def date(df):
     df['Day_sin'] = np.sin(2 * np.pi * df['Day'] / 31)
     df['Day_cos'] = np.cos(2 * np.pi * df['Day'] / 31)
 
-    df['Group'] = (df['Year']-2020)*48 + df['Month']*4 + df['Day']//7
+    # df['Group'] = (df['Year']-2020)*48 + df['Month']*4 + df['Day']//7
 
     return df
 
@@ -130,101 +173,6 @@ train, eval = train_test_split(train_df, train_size=0.8)
 
 X_train, y_train = train.drop(target, axis=1), train[target]
 X_eval, y_eval = eval.drop(target, axis=1), eval[target]
-
-X_train_nn = np.array(X_train)
-X_train_nn = torch.tensor(
-    X_train_nn, dtype=torch.float32
-)
-
-X_eval_nn = np.array(X_eval)
-X_eval_nn = torch.tensor(
-    X_eval_nn, dtype=torch.float32
-)
-
-y_train_nn = np.array(y_train)
-y_train_nn = torch.tensor(
-    y_train_nn, dtype=torch.float32
-).view(-1, 1)
-
-nn_params = {
-    "hidden_size": 128,
-    "num_layers": 5,
-    "dropout": 0.2,
-    "lr": 1e-4,
-    "weight_decay": 1e-5,
-}
-
-
-class Model(nn.Module):
-    def __init__(
-        self,
-        input_size,
-        hidden_size,
-        num_layers,
-        dropout,
-        lr,
-        weight_decay
-    ):
-        super(Model, self).__init__()
-
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-
-        self.fc1 = nn.Linear(input_size, hidden_size)
-        self.dropout = nn.Dropout(dropout)
-        self.fc2 = nn.Linear(hidden_size, 1)
-
-        self.optimizer = torch.optim.Adam(self.parameters(), lr=lr, weight_decay=weight_decay)
-        self.loss_fn = nn.MSELoss()
-        self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=10, gamma=0.5)
-
-    def forward(self, x):
-        x = F.relu(self.fc1(x))
-        x = self.dropout(x)
-        x = self.fc2(x)
-        return x
-
-
-model_NN = Model(
-    input_size=X_train_nn.shape[-1],
-    **nn_params
-)
-
-data_loader = data.DataLoader(
-    data.TensorDataset(X_train_nn, y_train_nn),
-    batch_size=32
-)
-
-for epoch in range(100):
-    model_NN.train()
-    epoch_loss = 0.0
-    for batch_idx, (inputs, targets) in enumerate(data_loader):
-        model_NN.optimizer.zero_grad()
-
-        # Forward pass
-        outputs = model_NN.forward(inputs)
-
-        # Calculate loss
-        loss = model_NN.loss_fn(outputs, targets)
-
-        # Backward pass
-        loss.backward()
-        model_NN.optimizer.step()
-
-        epoch_loss += loss.item()
-
-    # Log the training progress
-    if epoch % 10 == 0:
-        print(f"Epoch {epoch}, Loss: {epoch_loss/len(data_loader)}")
-
-model_NN.eval()
-with torch.no_grad():
-    y_pred_train = model_NN(X_train_nn)
-    y_pred = model_NN(X_eval_nn)
-
-y_pred = y_pred.numpy()
-
-score_NN = mean_absolute_percentage_error(y_true=y_eval, y_pred=y_pred)
-print(score_NN)
 
 model_XGB = XGBRegressor(
     n_estimators=1000,
