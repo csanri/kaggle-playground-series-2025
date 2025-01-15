@@ -34,44 +34,44 @@ cat_cols.remove("date")
 
 colors = sns.color_palette("tab10")
 
-fig, axes = plt.subplots(
-    nrows=len(cat_cols),
-    ncols=1,
-    figsize=(10, 5 * len(cat_cols))
-)
+# fig, axes = plt.subplots(
+#     nrows=len(cat_cols),
+#     ncols=1,
+#     figsize=(10, 5 * len(cat_cols))
+# )
 
-for i, col in enumerate(cat_cols):
-    sns.countplot(
-        data=train_df,
-        x=col,
-        ax=axes[i],
-        color=colors[i]
-    )
+# for i, col in enumerate(cat_cols):
+#     sns.countplot(
+#         data=train_df,
+#         x=col,
+#         ax=axes[i],
+#         color=colors[i]
+#     )
 
-plt.tight_layout()
-plt.savefig("images/cat_data.jpeg", dpi=300)
-plt.show()
+# plt.tight_layout()
+# plt.savefig("images/cat_data.jpeg", dpi=300)
+# plt.show()
 
-plt.figure(figsize=(20, 16))
+# plt.figure(figsize=(20, 16))
 
-sns.histplot(
-    data=train_df,
-    x=target,
-    color=colors[0],
-    kde=True
-)
+# sns.histplot(
+#     data=train_df,
+#     x=target,
+#     color=colors[0],
+#     kde=True
+# )
 
-plt.savefig("images/num_sold.jpeg", dpi=300)
-plt.show()
+# plt.savefig("images/num_sold.jpeg", dpi=300)
+# plt.show()
 
-# Checking for missing data
-plt.figure(figsize=(20, 16))
+# # Checking for missing data
+# plt.figure(figsize=(20, 16))
 
-sns.heatmap(train_df.isna(), cbar=False, yticklabels=False)
-plt.title("Plot of missing values")
+# sns.heatmap(train_df.isna(), cbar=False, yticklabels=False)
+# plt.title("Plot of missing values")
 
-plt.savefig("images/missing_values.jpeg", dpi=300)
-plt.show()
+# plt.savefig("images/missing_values.jpeg", dpi=300)
+# plt.show()
 
 # The target data has missing values
 num_sold_groups = train_df.groupby(cat_cols)[target].count().reset_index()
@@ -82,12 +82,12 @@ num_sold_groups = num_sold_groups.pivot_table(
     aggfunc="sum"
 )
 
-plt.figure(figsize=(20, 16))
+# plt.figure(figsize=(20, 16))
 
-sns.heatmap(num_sold_groups, annot=True, fmt=".0f")
+# sns.heatmap(num_sold_groups, annot=True, fmt=".0f")
 
-plt.savefig("images/num_sold_heatmap.jpeg", dpi=300)
-plt.show()
+# plt.savefig("images/num_sold_heatmap.jpeg", dpi=300)
+# plt.show()
 
 train_df["date"] = pd.to_datetime(
     train_df["date"],
@@ -99,84 +99,84 @@ countries = train_df["country"].unique()
 ncols = 2
 nrows = (len(countries) + ncols - 1) // ncols
 
-fig, axes = plt.subplots(
-    nrows=nrows,
-    ncols=ncols,
-    figsize=(5 * ncols, 5 * nrows)
-)
+# fig, axes = plt.subplots(
+#     nrows=nrows,
+#     ncols=ncols,
+#     figsize=(5 * ncols, 5 * nrows)
+# )
 
-axes = axes.flatten()
+# axes = axes.flatten()
 
-for i, country in enumerate(countries):
-    sns.lineplot(
-        train_df.loc[train_df["country"] == country],
-        x="date",
-        y=target,
-        ax=axes[i],
-        color=colors[i],
-        errorbar=None
-    )
-    print(country)
+# for i, country in enumerate(countries):
+#     sns.lineplot(
+#         train_df.loc[train_df["country"] == country],
+#         x="date",
+#         y=target,
+#         ax=axes[i],
+#         color=colors[i],
+#         errorbar=None
+#     )
+#     print(country)
 
-plt.tight_layout()
-plt.savefig("images/country_lineplot.jpeg", dpi=300)
-plt.show()
+# plt.tight_layout()
+# plt.savefig("images/country_lineplot.jpeg", dpi=300)
+# plt.show()
 
 products = train_df["product"].unique()
 
-ncols = 2
-nrows = (len(products) + ncols - 1) // ncols
+# ncols = 2
+# nrows = (len(products) + ncols - 1) // ncols
 
-fig, axes = plt.subplots(
-    nrows=nrows,
-    ncols=ncols,
-    figsize=(5 * ncols, 5 * nrows)
-)
+# fig, axes = plt.subplots(
+#     nrows=nrows,
+#     ncols=ncols,
+#     figsize=(5 * ncols, 5 * nrows)
+# )
 
-axes = axes.flatten()
+# axes = axes.flatten()
 
-for i, product in enumerate(products):
-    sns.lineplot(
-        train_df.loc[train_df["product"] == product],
-        x="date",
-        y=target,
-        ax=axes[i],
-        color=colors[i],
-        errorbar=None
-    )
-    print(product)
+# for i, product in enumerate(products):
+#     sns.lineplot(
+#         train_df.loc[train_df["product"] == product],
+#         x="date",
+#         y=target,
+#         ax=axes[i],
+#         color=colors[i],
+#         errorbar=None
+#     )
+#     print(product)
 
-plt.tight_layout()
-plt.savefig("images/product_lineplot.jpeg", dpi=300)
-plt.show()
+# plt.tight_layout()
+# plt.savefig("images/product_lineplot.jpeg", dpi=300)
+# plt.show()
 
 stores = train_df["store"].unique()
 
-ncols = 3
-nrows = (len(stores) + ncols - 1) // ncols
+# ncols = 3
+# nrows = (len(stores) + ncols - 1) // ncols
 
-fig, axes = plt.subplots(
-    nrows=nrows,
-    ncols=ncols,
-    figsize=(5 * ncols, 5 * nrows)
-)
+# fig, axes = plt.subplots(
+#     nrows=nrows,
+#     ncols=ncols,
+#     figsize=(5 * ncols, 5 * nrows)
+# )
 
-axes = axes.flatten()
+# axes = axes.flatten()
 
-for i, store in enumerate(stores):
-    sns.lineplot(
-        train_df.loc[train_df["store"] == store],
-        x="date",
-        y=target,
-        ax=axes[i],
-        color=colors[i],
-        errorbar=None
-    )
-    print(store)
+# for i, store in enumerate(stores):
+#     sns.lineplot(
+#         train_df.loc[train_df["store"] == store],
+#         x="date",
+#         y=target,
+#         ax=axes[i],
+#         color=colors[i],
+#         errorbar=None
+#     )
+#     print(store)
 
-plt.tight_layout()
-plt.savefig("images/store_lineplot.jpeg", dpi=300)
-plt.show()
+# plt.tight_layout()
+# plt.savefig("images/store_lineplot.jpeg", dpi=300)
+# plt.show()
 
 country_weights = train_df.groupby("country")[
     target
@@ -186,17 +186,17 @@ country_weights = train_df.groupby("country")[
 
 country_weights = country_weights.reset_index()
 
-plt.figure(figsize=(20, 16))
+# plt.figure(figsize=(20, 16))
 
-sns.barplot(
-    country_weights,
-    x="country",
-    y=target
-)
+# sns.barplot(
+#     country_weights,
+#     x="country",
+#     y=target
+# )
 
-plt.tight_layout()
-plt.savefig("images/country_wights.jpeg", dpi=300)
-plt.show()
+# plt.tight_layout()
+# plt.savefig("images/country_wights.jpeg", dpi=300)
+# plt.show()
 
 weight_over_time = train_df.groupby(["date", "country"])[
     target
@@ -206,18 +206,18 @@ weight_over_time = train_df.groupby(["date", "country"])[
 
 weight_over_time = weight_over_time.reset_index()
 
-plt.figure(figsize=(20, 16))
+# plt.figure(figsize=(20, 16))
 
-sns.lineplot(
-    weight_over_time,
-    x="date",
-    y=target,
-    hue="country"
-)
+# sns.lineplot(
+#     weight_over_time,
+#     x="date",
+#     y=target,
+#     hue="country"
+# )
 
-plt.tight_layout()
-plt.savefig("images/country_wights_over_time.jpeg", dpi=300)
-plt.show()
+# plt.tight_layout()
+# plt.savefig("images/country_wights_over_time.jpeg", dpi=300)
+# plt.show()
 
 """
 The weights change over time,
@@ -256,27 +256,31 @@ merged_df = pd.merge(weight_over_time, gdp,
                      how="left"
                      )
 
-plt.figure(figsize=(20, 16))
+# plt.figure(figsize=(20, 16))
 
-sns.lineplot(
-    merged_df,
-    x="date",
-    y=target,
-    hue="country",
-)
+# sns.lineplot(
+#     merged_df,
+#     x="date",
+#     y=target,
+#     hue="country",
+# )
 
-sns.lineplot(
-    merged_df,
-    x="Year",
-    y="GDP per Capita",
-    hue="country",
-    legend=False,
-    palette=["black"]*len(countries)
-)
+# sns.lineplot(
+#     merged_df,
+#     x="Year",
+#     y="GDP per Capita",
+#     hue="country",
+#     legend=False,
+#     palette=["black"]*len(countries)
+# )
 
-plt.tight_layout()
-plt.savefig("images/country_weights_and_gdp_over_time.jpeg", dpi=300)
-plt.show()
+# plt.tight_layout()
+# plt.savefig("images/country_weights_and_gdp_over_time.jpeg", dpi=300)
+# plt.show()
+
+year_avg = train_df.groupby(["date", "country"])[target].mean()
+
+print(year_avg.reset_index())
 
 """
 for country in countries:
