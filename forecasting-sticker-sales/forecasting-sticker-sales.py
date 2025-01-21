@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
+import optuna
 
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_percentage_error
@@ -14,6 +15,7 @@ pd.set_option('display.max_columns', None)
 
 target = "num_sold"
 random_state = 42
+opt_iter = 30
 
 train_df = pd.read_csv("train.csv")
 train_df = train_df.drop("id", axis=1)
@@ -278,66 +280,52 @@ merged_df = pd.merge(weight_over_time, gdp,
 # plt.savefig("images/country_weights_and_gdp_over_time.jpeg", dpi=300)
 # plt.show()
 
-year_avg = train_df.groupby(["date", "country"])[target].mean()
+year_avg = train_df.copy()
+year_avg["year"] = year_avg["date"].dt.year
+year_avg = year_avg.groupby(["year", "country"])[target].mean().reset_index()
 
-print(year_avg.reset_index())
-
-"""
 for country in countries:
-    # Get rows with missing values for the target in the current country
     na_values = train_df[(train_df[target].isna()) & (train_df["country"] == country)]
-
     for index, row in na_values.iterrows():
         year = row["date"].year
-
-        # Find matching GDP for the current country and year
-        matching_gdp = merged_df[(merged_df["Country Name"] == country) & (merged_df["Year"] == year)]
-
-        if not matching_gdp.empty:
-            # Get the GDP per capita value for the current country and year
-            gdp_value = matching_gdp["GDP per Capita"].values[0]
-
-            # Get the GDP ratio between Norway and the current country for the same year
-            ratio = merged_df[merged_df["Country Name"] == "Norway"]["GDP per Capita"].values[0] / gdp_value
-
-            # Get the total sales for the country in the same time period
-            total_sales_on_date = train_df[train_df["date"] == row["date"]][target].sum()
-
-            # Impute the missing value by multiplying the GDP ratio with the total sales on the same date
-            train_df.loc[index, target] = gdp_value * total_sales_on_date * ratio
-"""
+        matching = year_avg[(year_avg["country"] == country) & (year_avg["year"] == year)]
+        if not matching.empty:
+            value = matching["num_sold"].values[0]
+            train_df.loc[index, target] = value
 
 print(f"Missing values remaining: {train_df[target].isna().sum()}")
 print(train_df[target].value_counts())
 
 
 def date(df):
-    df["date_int"] = train_df["date"].astype(np.int64) / 10**9
+    df["Year"] = df["date"].dt.year
+    df["Day"] = df["date"].dt.day
+    df["Month"] = df["date"].dt.month
 
-    df['Year'] = df['date'].dt.year
-    df['Day'] = df['date'].dt.day
-    df['Month'] = df['date'].dt.month
+    # df["Month_name"] = df["date"].dt.month_name()
+    # df["Day_of_week"] = df["date"].dt.day_name()
+    # df["Week"] = df["date"].dt.isocalendar().week
 
-    df['Month_name'] = df['date'].dt.month_name()
-    df['Day_of_week'] = df['date'].dt.day_name()
-    df['Week'] = df['date'].dt.isocalendar().week
+    df["Year_sin"] = np.sin(2 * np.pi * df["Year"])
+    df["Year_cos"] = np.cos(2 * np.pi * df["Year"])
 
-    df['Year_sin'] = np.sin(2 * np.pi * df['Year'])
-    df['Year_cos'] = np.cos(2 * np.pi * df['Year'])
+    df["Month_sin"] = np.sin(2 * np.pi * df["Month"] / 12)
+    df["Month_cos"] = np.cos(2 * np.pi * df["Month"] / 12)
 
-    df['Month_sin'] = np.sin(2 * np.pi * df['Month'] / 12)
-    df['Month_cos'] = np.cos(2 * np.pi * df['Month'] / 12)
+    df["Day_sin"] = np.sin(2 * np.pi * df["Day"] / 31)
+    df["Day_cos"] = np.cos(2 * np.pi * df["Day"] / 31)
 
-    df['Day_sin'] = np.sin(2 * np.pi * df['Day'] / 31)
-    df['Day_cos'] = np.cos(2 * np.pi * df['Day'] / 31)
+    df.drop(["Year", "Day", "Month"], axis=1, inplace=True)
 
     return df
 
 
-train_df = date(train_df)
+# train_df = date(train_df)
 
 cat_cols = train_df.select_dtypes(include="object").columns.tolist()
-cat_cols.remove("date")
+
+train_df["lag_7"] = train_df.groupby(["country", "product", "store"])["num_sold"].shift(7)
+train_df["rolling_mean_30"] = train_df.groupby(["country", "product", "store"])["num_sold"].transform(lambda x: x.rolling(30, min_periods=1).mean())
 
 train_df = pd.get_dummies(
     train_df,
@@ -352,20 +340,56 @@ train_df["date"] = pd.to_datetime(
     format="ISO8601"
 ).astype(np.int64) / 10**9
 
-train_df = train_df.dropna()
-
 train_df.columns = train_df.columns.str.replace(" ", "_")
 
-train, eval = train_test_split(train_df, train_size=0.8)
+train, eval = train_test_split(
+    train_df,
+    train_size=0.8,
+    random_state=random_state
+)
 
 X_train, y_train = train.drop(target, axis=1), train[target]
 X_eval, y_eval = eval.drop(target, axis=1), eval[target]
 
-model_XGB = XGBRegressor(
-    n_estimators=1000,
-    random_state=random_state
-)
 
+def objective_XGB(trial) -> float:
+    params = {
+        'objective': 'reg:squarederror',
+        "n_estimators": 1000,
+        "learning_rate": trial.suggest_float("learning_rate", 1e-3, 0.1, log=True),
+        "max_depth": trial.suggest_int("max_depth", 1, 10),
+        "subsample": trial.suggest_float("subsample", 0.05, 1.0),
+        "colsample_bytree": trial.suggest_float("colsample_bytree", 0.05, 1.0),
+        "min_child_weight": trial.suggest_int("min_child_weight", 1, 20),
+        'verbosity': 0,
+        'device': 'cuda',
+        'n_jobs': -1
+    }
+
+    model = XGBRegressor(**params, random_state=random_state)
+
+    model.fit(X_train, y_train)
+
+    y_pred = model.predict(X_eval)
+
+    mape = mean_absolute_percentage_error(y_true=y_eval, y_pred=y_pred)
+
+    print("=" * 13)
+    print("MAPE: %.5f" % (mape))
+    print("=" * 13)
+
+    return mape
+
+
+study_XGB = optuna.create_study(
+    direction='minimize',
+    pruner=optuna.pruners.MedianPruner()
+)
+study_XGB.optimize(objective_XGB, n_trials=opt_iter)
+
+model_XGB = XGBRegressor(**study_XGB.best_params,
+                         n_estimators=1000,
+                         random_state=random_state)
 model_XGB.fit(X_train, y_train)
 
 y_pred = model_XGB.predict(X_eval)
