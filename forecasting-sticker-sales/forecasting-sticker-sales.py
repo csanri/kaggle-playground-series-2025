@@ -4,21 +4,25 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 import optuna
 
-from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_percentage_error
 
 from xgboost import XGBRegressor
 from lightgbm import LGBMRegressor
+from datetime import datetime
 
 # Setting this so jupyter shows every column
 pd.set_option('display.max_columns', None)
 
 target = "num_sold"
 random_state = 42
-opt_iter = 30
+opt_iter = 50
 
 train_df = pd.read_csv("train.csv")
 train_df = train_df.drop("id", axis=1)
+
+test_df = pd.read_csv("test.csv")
+idx = test_df["id"]
+test_df = test_df.drop("id", axis=1)
 
 # Getting some basic info about the data
 print("=" * 30)
@@ -92,6 +96,11 @@ num_sold_groups = num_sold_groups.pivot_table(
 # plt.show()
 
 train_df["date"] = pd.to_datetime(
+    train_df["date"],
+    format="ISO8601"
+)
+
+test_df["date"] = pd.to_datetime(
     train_df["date"],
     format="ISO8601"
 )
@@ -252,11 +261,14 @@ gdp["Year"] = pd.to_datetime(
     format="ISO8601"
 ).dt.year
 
-merged_df = pd.merge(weight_over_time, gdp,
-                     left_on=["date", "country"],
-                     right_on=["Year", "Country Name"],
-                     how="left"
-                     )
+merged_df = pd.merge(
+    weight_over_time, gdp,
+    left_on=["date", "country"],
+    right_on=["Year", "Country Name"],
+    how="left"
+)
+
+merged_df = merged_df[["Year", "country", "GDP per Capita"]]
 
 # plt.figure(figsize=(20, 16))
 
@@ -284,27 +296,25 @@ year_avg = train_df.copy()
 year_avg["year"] = year_avg["date"].dt.year
 year_avg = year_avg.groupby(["year", "country"])[target].mean().reset_index()
 
-for country in countries:
-    na_values = train_df[(train_df[target].isna()) & (train_df["country"] == country)]
-    for index, row in na_values.iterrows():
-        year = row["date"].year
-        matching = year_avg[(year_avg["country"] == country) & (year_avg["year"] == year)]
-        if not matching.empty:
-            value = matching["num_sold"].values[0]
-            train_df.loc[index, target] = value
+# for country in countries:
+#     na_values = train_df[(train_df[target].isna()) & (train_df["country"] == country)]
+#     for index, row in na_values.iterrows():
+#         year = row["date"].year
+#         matching = year_avg[(year_avg["country"] == country) & (year_avg["year"] == year)]
+#         if not matching.empty:
+#             value = matching[target].values[0]
+#             train_df.loc[index, target] = value
 
 print(f"Missing values remaining: {train_df[target].isna().sum()}")
 print(train_df[target].value_counts())
 
+train_df = train_df[~train_df[target].isna()]
 
-def date(df):
+
+def date(df) -> pd.DataFrame:
     df["Year"] = df["date"].dt.year
     df["Day"] = df["date"].dt.day
     df["Month"] = df["date"].dt.month
-
-    # df["Month_name"] = df["date"].dt.month_name()
-    # df["Day_of_week"] = df["date"].dt.day_name()
-    # df["Week"] = df["date"].dt.isocalendar().week
 
     df["Year_sin"] = np.sin(2 * np.pi * df["Year"])
     df["Year_cos"] = np.cos(2 * np.pi * df["Year"])
@@ -315,38 +325,57 @@ def date(df):
     df["Day_sin"] = np.sin(2 * np.pi * df["Day"] / 31)
     df["Day_cos"] = np.cos(2 * np.pi * df["Day"] / 31)
 
-    df.drop(["Year", "Day", "Month"], axis=1, inplace=True)
+    df.drop(["Day", "Month"], axis=1, inplace=True)
 
     return df
 
 
-# train_df = date(train_df)
+def add_gdp_features(df):
+    df["Year"] = df["date"].dt.year
 
-cat_cols = train_df.select_dtypes(include="object").columns.tolist()
+    merged = pd.merge(
+        df,
+        merged_df,
+        on=["country", "Year"],
+        how="left"
+    )
 
-train_df["lag_7"] = train_df.groupby(["country", "product", "store"])["num_sold"].shift(7)
-train_df["rolling_mean_30"] = train_df.groupby(["country", "product", "store"])["num_sold"].transform(lambda x: x.rolling(30, min_periods=1).mean())
+    merged["GDP per Capita"] = merged.groupby("country")["GDP per Capita"].ffill()
 
-train_df = pd.get_dummies(
-    train_df,
-    columns=cat_cols,
-    prefix_sep="_",
-    drop_first=True,
-    dtype="int"
-)
+    df = df.drop("Year", axis=1)
 
-train_df["date"] = pd.to_datetime(
-    train_df["date"],
-    format="ISO8601"
-).astype(np.int64) / 10**9
+    return merged
 
-train_df.columns = train_df.columns.str.replace(" ", "_")
 
-train, eval = train_test_split(
-    train_df,
-    train_size=0.8,
-    random_state=random_state
-)
+trian_df = add_gdp_features(train_df)
+
+
+def feature_engineering(df) -> pd.DataFrame:
+    # df = date(df)
+    cat_cols = df.select_dtypes(include="object").columns.tolist()
+    df = pd.get_dummies(
+        df,
+        columns=cat_cols,
+        prefix_sep="_",
+        drop_first=True,
+        dtype="int"
+    )
+    df["date"] = pd.to_datetime(
+        df["date"],
+        format="ISO8601"
+    ).astype(np.int64) / 10**9
+
+    df.columns = df.columns.str.replace(" ", "_")
+    return df
+
+
+train_df = feature_engineering(train_df)
+test_df = feature_engineering(test_df)
+
+split_date = train_df["date"].quantile(0.8)
+
+train = train_df[train_df["date"] <= split_date]
+eval = train_df[train_df["date"] > split_date]
 
 X_train, y_train = train.drop(target, axis=1), train[target]
 X_eval, y_eval = eval.drop(target, axis=1), eval[target]
@@ -357,7 +386,7 @@ def objective_XGB(trial) -> float:
         'objective': 'reg:squarederror',
         "n_estimators": 1000,
         "learning_rate": trial.suggest_float("learning_rate", 1e-3, 0.1, log=True),
-        "max_depth": trial.suggest_int("max_depth", 1, 10),
+        "max_depth": trial.suggest_int("max_depth", 1, 12),
         "subsample": trial.suggest_float("subsample", 0.05, 1.0),
         "colsample_bytree": trial.suggest_float("colsample_bytree", 0.05, 1.0),
         "min_child_weight": trial.suggest_int("min_child_weight", 1, 20),
@@ -365,11 +394,8 @@ def objective_XGB(trial) -> float:
         'device': 'cuda',
         'n_jobs': -1
     }
-
     model = XGBRegressor(**params, random_state=random_state)
-
     model.fit(X_train, y_train)
-
     y_pred = model.predict(X_eval)
 
     mape = mean_absolute_percentage_error(y_true=y_eval, y_pred=y_pred)
@@ -387,9 +413,11 @@ study_XGB = optuna.create_study(
 )
 study_XGB.optimize(objective_XGB, n_trials=opt_iter)
 
-model_XGB = XGBRegressor(**study_XGB.best_params,
-                         n_estimators=1000,
-                         random_state=random_state)
+model_XGB = XGBRegressor(
+    **study_XGB.best_params,
+    n_estimators=1000,
+    random_state=random_state
+)
 model_XGB.fit(X_train, y_train)
 
 y_pred = model_XGB.predict(X_eval)
@@ -398,11 +426,34 @@ score_XGB = mean_absolute_percentage_error(y_true=y_eval, y_pred=y_pred)
 
 print(f"XGB score: {score_XGB}")
 
+
+def objective_LGBM(trial) -> float:
+    params = {
+        'objective': 'regression',
+        'n_estimators': 1000,
+        'learning_rate': trial.suggest_float('learning_rate', 1e-3, 0.1, log=True),
+        'num_leaves': trial.suggest_int('num_leaves', 20, 300),
+        'max_depth': trial.suggest_int('max_depth', 3, 12),
+        'min_child_samples': trial.suggest_int('min_child_samples', 10, 200),
+        'subsample': trial.suggest_float('subsample', 0.5, 1.0),
+        'colsample_bytree': trial.suggest_float('colsample_bytree', 0.5, 1.0),
+        'verbosity': -1,
+        'random_state': random_state
+    }
+    model = LGBMRegressor(**params)
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_eval)
+    return mean_absolute_percentage_error(y_eval, y_pred)
+
+
+study_LGBM = optuna.create_study(direction='minimize')
+study_LGBM.optimize(objective_LGBM, n_trials=opt_iter)
+
 model_LGBM = LGBMRegressor(
+    **study_LGBM.best_params,
     n_estimators=1000,
     random_state=random_state
 )
-
 model_LGBM.fit(X_train, y_train)
 
 y_pred = model_LGBM.predict(X_eval)
@@ -410,4 +461,27 @@ y_pred = model_LGBM.predict(X_eval)
 score_LGBM = mean_absolute_percentage_error(y_true=y_eval, y_pred=y_pred)
 
 print(f"LGBM score: {score_LGBM}")
+
+y_pred_xgb = model_XGB.predict(X_eval)
+y_pred_lgbm = model_LGBM.predict(X_eval)
+ensemble_pred = (y_pred_xgb + y_pred_lgbm) / 2
+ensemble_mape = mean_absolute_percentage_error(y_eval, ensemble_pred)
+
+print(f"Ensemble score: {ensemble_mape}")
+
+y_pred_xgb_test = model_XGB.predict(test_df)
+y_pred_lgbm_test = model_LGBM.predict(test_df)
+ensemble_pred_test = (y_pred_xgb_test + y_pred_lgbm_test) / 2
+
+submission = pd.DataFrame({
+    "id": idx,
+    target: ensemble_pred_test
+})
+
+submission.to_csv(
+    f"submissions/submission_{
+        datetime.now().strftime("%Y%m%d_%H%M%S")
+    }_XGB.csv",
+    index=False
+)
 
