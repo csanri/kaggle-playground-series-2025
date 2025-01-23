@@ -3,6 +3,9 @@ import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 import optuna
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
 from sklearn.metrics import mean_absolute_percentage_error
 
@@ -16,6 +19,8 @@ pd.set_option('display.max_columns', None)
 target = "num_sold"
 random_state = 42
 opt_iter = 50
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
 
 train_df = pd.read_csv("train.csv")
 train_df = train_df.drop("id", axis=1)
@@ -372,6 +377,35 @@ def feature_engineering(df) -> pd.DataFrame:
 train_df = feature_engineering(train_df)
 test_df = feature_engineering(test_df)
 
+
+def create_data(df, seq_len):
+    sequences = []
+    targets = []
+
+    data = df.values
+
+    for i in range(len(data) - seq_len):
+        seq = data[i:i + seq_len]
+
+        x_seq = np.delete(seq, 1, axis=1)
+        y_seq = data[i + seq_len][1]
+
+        sequences.append(x_seq)
+        targets.append(y_seq)
+
+    x = torch.tensor(
+        np.array(x_seq),
+        dtype=torch.float32
+    ).to(device)
+
+    y = torch.tensor(
+        np.array(y_seq),
+        dtype=torch.float32
+    ).to(device)
+
+    return x, y
+
+
 split_date = train_df["date"].quantile(0.8)
 
 train = train_df[train_df["date"] <= split_date]
@@ -379,6 +413,59 @@ eval = train_df[train_df["date"] > split_date]
 
 X_train, y_train = train.drop(target, axis=1), train[target]
 X_eval, y_eval = eval.drop(target, axis=1), eval[target]
+
+
+class Model(nn.Module):
+    def __init__(
+        self,
+        input_size,
+        hidden_size,
+        num_layers,
+        output_size,
+        dropout,
+        lr,
+    ):
+        super(Model, self).__init__()
+
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.output_size = output_size
+        self.lstm = nn.LSTM(
+            input_size=input_size,
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            dropout=dropout,
+            batch_first=True
+        )
+        self.linear = nn.Linear(hidden_size, output_size)
+        self.dropout = dropout
+        self.lr = lr
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.to(self.device)
+        self.optimizer = torch.optim.Adam(
+            params=self.parameters(),
+            lr=self.lr,
+        )
+
+    def forward(self, x):
+        h_0 = torch.zeros(
+            self.num_layers,
+            x.size(0),
+            self.hidden_size
+        ).to(self.device)
+
+        c_0 = torch.zeros(
+            self.num_layers,
+            x.size(0),
+            self.hidden_size,
+        ).to(self.device)
+
+        x, _ = x.to(self.device, (h_0, c_0))
+        x = self.lstm(x)
+        x = self.linear(x[:, -1, :])
+
+        return x
 
 
 def objective_XGB(trial) -> float:
