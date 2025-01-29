@@ -6,6 +6,7 @@ import optuna
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.utils.data as data
 
 from sklearn.metrics import mean_absolute_percentage_error
 
@@ -310,6 +311,53 @@ year_avg = year_avg.groupby(["year", "country"])[target].mean().reset_index()
 #             value = matching[target].values[0]
 #             train_df.loc[index, target] = value
 
+target_mask = (
+    (train_df["country"] == "Kenya") &
+    (train_df["store"] == "Discount Stickers") &
+    (train_df["product"] == "Holographic Goose")
+)
+source_mask = (
+    (train_df["country"] == "Finland") &
+    (train_df["store"] == "Discount Stickers") &
+    (train_df["product"] == "Holographic Goose")
+)
+
+kenya_sums = train_df.loc[train_df["country"] == "Kenya"].groupby("date")["num_sold"].sum()
+finland_sums = train_df.loc[train_df["country"] == "Finland"].groupby("date")["num_sold"].sum()
+kenya_finland_ratio = (kenya_sums / finland_sums).mean()
+
+train_df.loc[target_mask, "num_sold"] = train_df.loc[target_mask, "num_sold"].where(
+    train_df.loc[target_mask, "num_sold"].notna(),
+    train_df.loc[source_mask, "num_sold"].values * kenya_finland_ratio
+)
+
+target_mask = (
+    (train_df["country"] == "Canada") &
+    (train_df["store"] == "Discount Stickers") &
+    (train_df["product"] == "Holographic Goose")
+)
+train_df.loc[target_mask, "num_sold"] = train_df.loc[target_mask, "num_sold"].where(
+    train_df.loc[target_mask, "num_sold"].notna(),
+    train_df.loc[source_mask, "num_sold"].values
+)
+
+masks = [
+    (train_df["country"] == "Canada") &
+    (train_df["store"] == "Premium Sticker Mart") &
+    (train_df["product"] == "Holographic Goose"),
+
+    (train_df["country"] == "Kenya") &
+    (train_df["store"] == "Stickers for Less") &
+    (train_df["product"] == "Holographic Goose"),
+
+    (train_df["country"] == "Kenya") &
+    (train_df["store"] == "Discount Stickers") &
+    (train_df["product"] == "Kerneler")
+]
+
+for mask in masks:
+    train_df.loc[mask, "num_sold"] = train_df.loc[mask, "num_sold"].ffill()
+
 print(f"Missing values remaining: {train_df[target].isna().sum()}")
 print(train_df[target].value_counts())
 
@@ -327,15 +375,15 @@ def date(df) -> pd.DataFrame:
     df["Month_sin"] = np.sin(2 * np.pi * df["Month"] / 12)
     df["Month_cos"] = np.cos(2 * np.pi * df["Month"] / 12)
 
-    df["Day_sin"] = np.sin(2 * np.pi * df["Day"] / 31)
-    df["Day_cos"] = np.cos(2 * np.pi * df["Day"] / 31)
+    # df["Day_sin"] = np.sin(2 * np.pi * df["Day"] / 31)
+    # df["Day_cos"] = np.cos(2 * np.pi * df["Day"] / 31)
 
     df.drop(["Day", "Month"], axis=1, inplace=True)
 
     return df
 
 
-def add_gdp_features(df):
+def add_gdp_features(df) -> pd.DataFrame:
     df["Year"] = df["date"].dt.year
 
     merged = pd.merge(
@@ -345,18 +393,20 @@ def add_gdp_features(df):
         how="left"
     )
 
-    merged["GDP per Capita"] = merged.groupby("country")["GDP per Capita"].ffill()
+    merged["GDP per Capita"] = merged.groupby(
+        "country"
+    )["GDP per Capita"].ffill()
 
     df = df.drop("Year", axis=1)
 
     return merged
 
 
-trian_df = add_gdp_features(train_df)
+# trian_df = add_gdp_features(train_df)
 
 
 def feature_engineering(df) -> pd.DataFrame:
-    # df = date(df)
+    df = date(df)
     cat_cols = df.select_dtypes(include="object").columns.tolist()
     df = pd.get_dummies(
         df,
@@ -378,32 +428,32 @@ train_df = feature_engineering(train_df)
 test_df = feature_engineering(test_df)
 
 
-def create_data(df, seq_len):
-    sequences = []
-    targets = []
+# def create_data(df, seq_len):
+#     sequences = []
+#     targets = []
 
-    data = df.values
+#     data = df.values
 
-    for i in range(len(data) - seq_len):
-        seq = data[i:i + seq_len]
+#     for i in range(len(data) - seq_len):
+#         seq = data[i:i + seq_len]
 
-        x_seq = np.delete(seq, 1, axis=1)
-        y_seq = data[i + seq_len][1]
+#         x_seq = np.delete(seq, 1, axis=1)
+#         y_seq = data[i + seq_len][1]
 
-        sequences.append(x_seq)
-        targets.append(y_seq)
+#         sequences.append(x_seq)
+#         targets.append(y_seq)
 
-    x = torch.tensor(
-        np.array(x_seq),
-        dtype=torch.float32
-    ).to(device)
+#     x = torch.tensor(
+#         np.array(sequences),
+#         dtype=torch.float32
+#     ).to(device)
 
-    y = torch.tensor(
-        np.array(y_seq),
-        dtype=torch.float32
-    ).to(device)
+#     y = torch.tensor(
+#         np.array(targets),
+#         dtype=torch.float32
+#     ).to(device)
 
-    return x, y
+#     return x, y
 
 
 split_date = train_df["date"].quantile(0.8)
@@ -414,64 +464,103 @@ eval = train_df[train_df["date"] > split_date]
 X_train, y_train = train.drop(target, axis=1), train[target]
 X_eval, y_eval = eval.drop(target, axis=1), eval[target]
 
+# X_train, y_train = create_data(train, seq_len=30)
+# X_eval, y_eval = create_data(eval, seq_len=30)
 
-class Model(nn.Module):
-    def __init__(
-        self,
-        input_size,
-        hidden_size,
-        num_layers,
-        output_size,
-        dropout,
-        lr,
-    ):
-        super(Model, self).__init__()
 
-        self.input_size = input_size
-        self.hidden_size = hidden_size
-        self.num_layers = num_layers
-        self.output_size = output_size
-        self.lstm = nn.LSTM(
-            input_size=input_size,
-            hidden_size=hidden_size,
-            num_layers=num_layers,
-            dropout=dropout,
-            batch_first=True
-        )
-        self.linear = nn.Linear(hidden_size, output_size)
-        self.dropout = dropout
-        self.lr = lr
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.to(self.device)
-        self.optimizer = torch.optim.Adam(
-            params=self.parameters(),
-            lr=self.lr,
-        )
+# class Model(nn.Module):
+#     def __init__(
+#         self,
+#         input_size,
+#         hidden_size,
+#         num_layers,
+#         output_size,
+#         dropout,
+#         lr,
+#     ):
+#         super(Model, self).__init__()
 
-    def forward(self, x):
-        h_0 = torch.zeros(
-            self.num_layers,
-            x.size(0),
-            self.hidden_size
-        ).to(self.device)
+#         self.input_size = input_size
+#         self.hidden_size = hidden_size
+#         self.num_layers = num_layers
+#         self.output_size = output_size
+#         self.lstm = nn.LSTM(
+#             input_size=input_size,
+#             hidden_size=hidden_size,
+#             num_layers=num_layers,
+#             dropout=dropout,
+#             batch_first=True
+#         )
+#         self.linear = nn.Linear(hidden_size, output_size)
+#         self.dropout = dropout
+#         self.lr = lr
+#         self.device = "cuda" if torch.cuda.is_available() else "cpu"
+#         self.to(self.device)
+#         self.optimizer = torch.optim.Adam(
+#             params=self.parameters(),
+#             lr=self.lr,
+#         )
 
-        c_0 = torch.zeros(
-            self.num_layers,
-            x.size(0),
-            self.hidden_size,
-        ).to(self.device)
+#     def forward(self, x):
+#         h_0 = torch.zeros(
+#             self.num_layers,
+#             x.size(0),
+#             self.hidden_size
+#         ).to(self.device)
 
-        x, _ = x.to(self.device, (h_0, c_0))
-        x = self.lstm(x)
-        x = self.linear(x[:, -1, :])
+#         c_0 = torch.zeros(
+#             self.num_layers,
+#             x.size(0),
+#             self.hidden_size,
+#         ).to(self.device)
 
-        return x
+#         x, _ = self.lstm(x, (h_0, c_0))
+#         x = self.linear(x[:, -1, :])
+
+#         return x
+
+
+# model_LSTM = Model(
+#     input_size=X_train.size(2),
+#     hidden_size=10,
+#     num_layers=5,
+#     output_size=1,
+#     dropout=0.2,
+#     lr=0.01
+# )
+
+# loss_fn = nn.MSELoss()
+# loader = data.DataLoader(
+#     dataset=data.TensorDataset(X_train, y_train),
+#     shuffle=True,
+#     batch_size=1
+# )
+
+# epochs = 2000
+
+# for epoch in range(epochs):
+#     model_LSTM.train()
+#     for X_batch, y_batch in loader:
+#         y_pred = model_LSTM(X_batch)
+#         loss = loss_fn(y_pred, y_batch.unsqueeze(1))
+#         model_LSTM.optimizer.zero_grad()
+#         loss.backward()
+#         model_LSTM.optimizer.step()
+#     if epoch % 100 != 0:
+#         continue
+#     model_LSTM.eval()
+#     with torch.no_grad():
+#         y_pred = model_LSTM(X_train)
+#         train_rmse = np.sqrt(loss_fn(y_pred, y_train))
+#         y_pred = model_LSTM(X_eval)
+#         eval_rmse = np.sqrt(loss_fn(y_pred, y_eval))
+#     print("Epoch %d: train RMSE %.4f, test RMSE %.4f" % (epoch, train_rmse, eval_rmse))
 
 
 def objective_XGB(trial) -> float:
     params = {
         'objective': 'reg:squarederror',
-        "n_estimators": 1000,
+        "n_estimators": trial.suggest_int('n_estimators', 500, 4000),
         "learning_rate": trial.suggest_float("learning_rate", 1e-3, 0.1, log=True),
         "max_depth": trial.suggest_int("max_depth", 1, 12),
         "subsample": trial.suggest_float("subsample", 0.05, 1.0),
@@ -479,7 +568,8 @@ def objective_XGB(trial) -> float:
         "min_child_weight": trial.suggest_int("min_child_weight", 1, 20),
         'verbosity': 0,
         'device': 'cuda',
-        'n_jobs': -1
+        'n_jobs': -1,
+        "eval_metric": "mape"
     }
     model = XGBRegressor(**params, random_state=random_state)
     model.fit(X_train, y_train)
@@ -502,7 +592,6 @@ study_XGB.optimize(objective_XGB, n_trials=opt_iter)
 
 model_XGB = XGBRegressor(
     **study_XGB.best_params,
-    n_estimators=1000,
     random_state=random_state
 )
 model_XGB.fit(X_train, y_train)
@@ -517,7 +606,7 @@ print(f"XGB score: {score_XGB}")
 def objective_LGBM(trial) -> float:
     params = {
         'objective': 'regression',
-        'n_estimators': 1000,
+        "n_estimators": trial.suggest_int('n_estimators', 500, 4000),
         'learning_rate': trial.suggest_float('learning_rate', 1e-3, 0.1, log=True),
         'num_leaves': trial.suggest_int('num_leaves', 20, 300),
         'max_depth': trial.suggest_int('max_depth', 3, 12),
@@ -525,12 +614,20 @@ def objective_LGBM(trial) -> float:
         'subsample': trial.suggest_float('subsample', 0.5, 1.0),
         'colsample_bytree': trial.suggest_float('colsample_bytree', 0.5, 1.0),
         'verbosity': -1,
-        'random_state': random_state
+        'random_state': random_state,
+        "metric": "mape"
     }
     model = LGBMRegressor(**params)
     model.fit(X_train, y_train)
     y_pred = model.predict(X_eval)
-    return mean_absolute_percentage_error(y_eval, y_pred)
+
+    mape = mean_absolute_percentage_error(y_true=y_eval, y_pred=y_pred)
+
+    print("=" * 13)
+    print("MAPE: %.5f" % (mape))
+    print("=" * 13)
+
+    return mape
 
 
 study_LGBM = optuna.create_study(direction='minimize')
@@ -538,7 +635,6 @@ study_LGBM.optimize(objective_LGBM, n_trials=opt_iter)
 
 model_LGBM = LGBMRegressor(
     **study_LGBM.best_params,
-    n_estimators=1000,
     random_state=random_state
 )
 model_LGBM.fit(X_train, y_train)
@@ -562,13 +658,13 @@ ensemble_pred_test = (y_pred_xgb_test + y_pred_lgbm_test) / 2
 
 submission = pd.DataFrame({
     "id": idx,
-    target: ensemble_pred_test
+    target: y_pred_xgb_test
 })
 
 submission.to_csv(
     f"submissions/submission_{
         datetime.now().strftime("%Y%m%d_%H%M%S")
-    }_XGB.csv",
+    }.csv",
     index=False
 )
 
