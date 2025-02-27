@@ -3,8 +3,8 @@ import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.preprocessing import StandardScaler
+from sklearn.impute import SimpleImputer
 from sklearn.model_selection import train_test_split
 
 # Setting this so jupyter shows every column
@@ -14,6 +14,9 @@ train_df = pd.read_csv("train.csv")
 train_df = train_df.drop("id", axis=1)
 
 target = "Price"
+random_state = 42
+
+train_df.columns = train_df.columns.str.replace(" ", "_")
 
 print(train_df.info())
 print("=" * 30)
@@ -104,28 +107,47 @@ colors = sns.color_palette("tab10")
 # plt.savefig("images/target.jpeg", dpi=300)
 # plt.plot()
 
-train_df.columns = train_df.columns.str.replace(" ", "_")
-
-train_df["Laptop_Compartment"] = train_df["Laptop_Compartment"].map(
-    {
-        "No": 0,
-        "Yes": 1
-    }
+train, eval = train_test_split(
+    train_df,
+    train_size=0.8,
+    random_state=random_state
 )
 
-train_df["Waterproof"] = train_df["Waterproof"].map(
-    {
-        "No": 0,
-        "Yes": 1
-    }
+num_imputer = SimpleImputer(strategy="mean")
+cat_imputer = SimpleImputer(strategy="constant", fill_value="NA")
+
+train[num_cols] = num_imputer.fit_transform(train[num_cols])
+eval[num_cols] = num_imputer.fit_transform(eval[num_cols])
+
+for df in [train, eval]:
+    df["Laptop_Compartment"] = df["Laptop_Compartment"].map(
+        {
+            "No": 0,
+            "Yes": 1
+        }
+    )
+
+    df["Waterproof"] = df["Waterproof"].map(
+        {
+            "No": 0,
+            "Yes": 1
+        }
+    )
+
+dummy_cols = ["Brand", "Material", "Size", "Style", "Color"]
+
+train_df = pd.get_dummies(
+    data=train_df,
+    prefix_sep="_",
+    columns=dummy_cols,
+    dtype=np.int64,
 )
 
-print(train_df)
+for col in num_cols:
+    print(f"Skewness of {col}")
+    print(train_df[col].skew())
 
-ohe = OneHotEncoder()
 ss = StandardScaler()
-
-train, eval = train_test_split(train_df, train_size=0.8)
 
 X_train, y_train = train.drop(target, axis=1), train[target]
 X_eval, y_eval = eval.drop(target, axis=1), eval[target]
@@ -133,4 +155,5 @@ X_eval, y_eval = eval.drop(target, axis=1), eval[target]
 X_train[num_cols] = ss.fit_transform(X_train[num_cols], y=y_train)
 X_eval[num_cols] = ss.fit_transform(X_eval[num_cols], y=y_eval)
 
+print(train_df)
 
