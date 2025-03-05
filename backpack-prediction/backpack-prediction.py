@@ -433,7 +433,7 @@ submission = pd.DataFrame({
 })
 
 submission.to_csv(
-    f"submission_Ensemble_{
+    f"submissions/submission_Ensemble_{
         datetime.now().strftime("%Y%m%d_%H%M%S")
     }.csv",
     index=False
