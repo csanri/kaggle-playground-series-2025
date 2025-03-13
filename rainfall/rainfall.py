@@ -142,13 +142,8 @@ def create_group_features(df, train_df=None, combo_list=None, stats=None):
             group_cols = [col]
 
         group_stats = train_df.groupby(list(group_cols)).agg({
-            "day": stats,
             "humidity": stats,
             "cloud": stats,
-            "temparature": stats,
-            "sunshine": stats,
-            "winddirection": stats,
-            "windspeed": stats,
             "pressure": stats
         })
 
@@ -163,9 +158,9 @@ def create_group_features(df, train_df=None, combo_list=None, stats=None):
     return df, new_features
 
 
-stats = ["mean", "median", "std", "min", "max"]
+stats = ["mean", "median", "std"]
 
-combos = ["day", "humidity", "cloud", "sunshine"]
+combos = ["day"]
 
 train, new_features = create_group_features(train, combo_list=combos, stats=stats)
 eval, _ = create_group_features(eval, train_df=train,  combo_list=combos, stats=stats)
