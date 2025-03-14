@@ -4,10 +4,10 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import roc_auc_score
 from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegression
 
-from xgboost import XGBClassifier
 from datetime import datetime
 
 # Setting this so jupyter shows every column
@@ -33,6 +33,13 @@ print(50 * "=")
 print(train_df.describe().transpose())
 print(50 * "=")
 print(train_df.isna().sum())
+print(test_df.isna().sum())
+print(50 * "=")
+
+test_df["winddirection"] = test_df["winddirection"].fillna(test_df["winddirection"].median())
+
+print(50 * "=")
+print(test_df.isna().sum())
 print(50 * "=")
 
 for col in train_df.columns:
@@ -99,9 +106,6 @@ colors = sns.color_palette("tab10")
 
 train_df_modified = train_df.copy()
 
-train_df_modified["temp_range"] = train_df_modified["maxtemp"] - train_df_modified["mintemp"]
-test_df["temp_range"] = test_df["maxtemp"] - test_df["mintemp"]
-
 train_base, eval_base = train_test_split(
     train_df,
     train_size=0.8,
@@ -117,18 +121,59 @@ train, eval = train_test_split(
     random_state=random_state
 )
 
-# stats = ["mean", "median"]
 
-# cols = ["cloud", "humidity", "temparature"]
+def generate_months(df) -> pd.DataFrame:
+    days_in_months = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
 
-# for col in cols:
-#     train_rain_stats = train.groupby("day")[col].agg(stats).reset_index()
-#     train_rain_stats.columns = ["day"] + [f"daily_{col}_{stat}" for stat in stats]
+    cum_days = [sum(days_in_months[:i+1]) for i in range(len(days_in_months))]
 
-#     train = train.merge(train_rain_stats, on="day", how="left")
-#     eval = eval.merge(train_rain_stats, on="day", how="left")
+    bins = [0] + cum_days
+    labels = [i for i in range(1, 13)]
 
-# print(train, eval)
+    df["month"] = pd.cut(
+        df["day"],
+        bins=bins,
+        labels=labels,
+        right=True
+    )
+
+    return df
+
+
+# train_df_modified["temp_range"] = train_df_modified["maxtemp"] - train_df_modified["mintemp"]
+# test_df["temp_range"] = test_df["maxtemp"] - test_df["mintemp"]
+
+train = generate_months(train)
+eval = generate_months(eval)
+test = generate_months(test_df)
+
+stats = ["mean", "median"]
+
+group = "month"
+cols = ["cloud", "humidity", "temparature"]
+
+for col in cols:
+    train_rain_stats = train.groupby(group)[col].agg(stats).reset_index()
+    train_rain_stats.columns = [group] + [f"{group}_{col}_{stat}" for stat in stats]
+
+    train = train.merge(train_rain_stats, on=group, how="left")
+    eval = eval.merge(train_rain_stats, on=group, how="left")
+    test = test.merge(train_rain_stats, on=group, how="left")
+
+
+def onehot(df) -> pd.DataFrame:
+    df = pd.get_dummies(
+        df,
+        prefix_sep="_",
+        columns=["month"],
+        dtype=np.int32,
+    )
+    return df
+
+
+train = onehot(train)
+eval = onehot(eval)
+test = onehot(test)
 
 
 def create_group_features(df, train_df=None, combo_list=None, stats=None):
@@ -162,9 +207,9 @@ stats = ["mean", "median", "std"]
 
 combos = ["day"]
 
-train, new_features = create_group_features(train, combo_list=combos, stats=stats)
-eval, _ = create_group_features(eval, train_df=train,  combo_list=combos, stats=stats)
-test, _ = create_group_features(test_df, train_df=train, combo_list=combos, stats=stats)
+# train, new_features = create_group_features(train, combo_list=combos, stats=stats)
+# eval, _ = create_group_features(eval, train_df=train,  combo_list=combos, stats=stats)
+# test, _ = create_group_features(test_df, train_df=train, combo_list=combos, stats=stats)
 
 X_train_base, y_train_base = train_base.drop(target, axis=1), train_base[target]
 X_eval_base, y_eval_base = eval_base.drop(target, axis=1), eval_base[target]
@@ -182,63 +227,90 @@ test[num_cols] = ss.transform(test[num_cols])
 # TRAINING AND TESTING #
 ########################
 
-model_XGB_base = XGBClassifier(
-    n_estimators=10000,
-    learning_rate=0.02,
-    max_depth=6,
-    subsample=0.8,
-    colsample_bytree=0.5,
-    early_stopping_rounds=100,
-    eval_metric='error',
-    device='cuda',
-    random_state=random_state
+# model_XGB_base = XGBClassifier(
+#     n_estimators=10000,
+#     learning_rate=0.02,
+#     max_depth=6,
+#     subsample=0.8,
+#     colsample_bytree=0.5,
+#     early_stopping_rounds=100,
+#     eval_metric='auc',
+#     device='cuda',
+#     random_state=random_state
+# )
+
+logreg_model_base = LogisticRegression(
+    max_iter=1000,
+    random_state=42,
+    penalty='l2',
+    class_weight='balanced',
+    solver='liblinear'
 )
 
-eval_set_base = [(X_eval_base, y_eval_base)]
+# eval_set_base = [(X_eval_base, y_eval_base)]
 
-model_XGB_base.fit(X_train_base, y_train_base, eval_set=eval_set_base)
+# model_XGB_base.fit(X_train_base, y_train_base, eval_set=eval_set_base)
+logreg_model_base.fit(X_train_base, y_train_base)
 
-model_XGB = XGBClassifier(
-    n_estimators=10000,
-    learning_rate=0.02,
-    max_depth=6,
-    subsample=0.8,
-    colsample_bytree=0.5,
-    early_stopping_rounds=100,
-    eval_metric='error',
-    device='cuda',
-    random_state=random_state
+# model_XGB = XGBClassifier(
+#     n_estimators=10000,
+#     learning_rate=0.02,
+#     max_depth=6,
+#     subsample=0.8,
+#     colsample_bytree=0.5,
+#     early_stopping_rounds=100,
+#     eval_metric='auc',
+#     device='cuda',
+#     random_state=random_state
+# )
+
+logreg_model = LogisticRegression(
+    max_iter=1000,
+    random_state=42,
+    penalty='l2',
+    class_weight='balanced',
+    solver='liblinear'
 )
 
-eval_set = [(X_eval, y_eval)]
+# eval_set = [(X_eval, y_eval)]
 
-model_XGB.fit(X_train, y_train, eval_set=eval_set)
+# model_XGB.fit(X_train, y_train, eval_set=eval_set)
+logreg_model.fit(X_train, y_train)
 
-pred_base = model_XGB_base.predict(X_eval_base)
-pred = model_XGB.predict(X_eval)
+# pred_base = model_XGB_base.predict(X_eval_base)
+# pred = model_XGB.predict(X_eval)
 
-score_XGB_base = accuracy_score(y_true=y_eval_base, y_pred=pred_base)
-score_XGB = accuracy_score(y_true=y_eval, y_pred=pred)
+pred_base = logreg_model_base.predict_proba(X_eval_base)[:, 1]
+pred = logreg_model.predict_proba(X_eval)[:, 1]
 
-print(f"XGB baseline score: {score_XGB_base:.4f} \nXGB modified score: {score_XGB:.4f}")
+pred_base = (pred_base >= 0.6).astype("int")
+pred = (pred >= 0.6).astype("int")
 
-feature_importance = model_XGB.get_booster().get_score(importance_type='weight')
+roc_auc_XGB_base = roc_auc_score(y_true=y_eval_base, y_score=pred_base)
+roc_auc_XGB = roc_auc_score(y_true=y_eval, y_score=pred)
 
-importance_df = pd.DataFrame({
-    'feature': list(feature_importance.keys()),
-    'importance': list(feature_importance.values())
-}).sort_values('importance', ascending=False)
+# feature_importance = model_XGB.get_booster().get_score(importance_type="weight")
 
-plt.figure(figsize=(12, 16))
-sns.barplot(x='importance', y='feature', data=importance_df.head(50))
-plt.title(f'Top {len(X_train.columns)} Feature Importance')
-plt.show()
+# importance_df = pd.DataFrame({
+#     'feature': list(feature_importance.keys()),
+#     'importance': list(feature_importance.values())
+# }).sort_values('importance', ascending=False)
 
-group_feat_importance = importance_df[importance_df['feature'].str.contains('_mean|_std|_max| _min| _median')]
-print("Top performing group features:")
-print(group_feat_importance.head(20))
+# plt.figure(figsize=(12, 16))
+# sns.barplot(x='importance', y='feature', data=importance_df.head(50))
+# plt.title(f'Top {len(X_train.columns)} Feature Importance')
+# plt.show()
 
-pred_test = model_XGB.predict(test)
+# print("=" * 30)
+# print(f"XGB baseline AUC-ROC: {roc_auc_XGB_base:.4f} \nXGB modified AUC-ROC: {roc_auc_XGB:.4f}")
+# print("=" * 30)
+
+
+print(f"LogReg baseline AUC-ROC: {roc_auc_XGB_base:.4f} \nLogReg modified AUC-ROC: {roc_auc_XGB:.4f}")
+
+# pred_test = model_XGB.predict(test)
+pred_test = logreg_model.predict_proba(test)[:, 1]
+pred_test = (pred_test >= 0.6).astype("int")
 
 submission = pd.DataFrame({
     "id": idx,
