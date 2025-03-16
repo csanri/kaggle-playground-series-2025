@@ -3,10 +3,11 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from sklearn.model_selection import train_test_split, TimeSeriesSplit
+from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import roc_auc_score, classification_report
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.linear_model import LogisticRegression
+from sklearn.svm import SVC
 
 from datetime import datetime
 
@@ -15,7 +16,7 @@ pd.set_option('display.max_columns', None)
 
 # Reading data
 train_df = pd.read_csv("train.csv")
-# train_df = train_df.drop("id", axis=1)
+train_df = train_df.drop("id", axis=1)
 
 test_df = pd.read_csv("test.csv")
 idx = test_df["id"]
@@ -36,7 +37,9 @@ print(train_df.isna().sum())
 print(test_df.isna().sum())
 print(50 * "=")
 
-test_df["winddirection"] = test_df["winddirection"].fillna(test_df["winddirection"].median())
+test_df["winddirection"] = test_df["winddirection"].fillna(
+    test_df["winddirection"].median()
+)
 
 print(50 * "=")
 print(test_df.isna().sum())
@@ -120,13 +123,45 @@ colors = sns.color_palette("tab10")
 # plt.savefig("images/boxplots.jpeg", dpi=300)
 # plt.show()
 
-plt.figure(figsize=(20, 16))
-plt.plot(train_df["id"], train_df["day"])
-plt.show()
+# fig, axes = plt.subplots(
+#     nrows=6,
+#     ncols=2,
+#     figsize=(12, 20)
+# )
+
+# axes = axes.flat
+
+# for i, (ax, col) in enumerate(zip(axes, num_cols)):
+#     sns.kdeplot(
+#         data=train_df,
+#         x=col,
+#         hue=target,
+#         ax=ax,
+#         color=colors[i % len(colors)]
+#     )
+
+# plt.tight_layout()
+# plt.savefig("images/kde_plots.jpeg", dpi=300)
+# plt.show()
+
+# plt.figure(figsize=(20, 16))
+# plt.plot(train_df["id"], train_df["day"])
+# plt.savefig("images/day_mismatch.jpeg", dpi=300)
+# plt.show()
+
+expected_pattern = np.tile(np.arange(1, 366), 6)
+train_df["day"] = expected_pattern[:len(train_df)]
+
+# plt.figure(figsize=(20, 16))
+# plt.plot(train_df["id"], train_df["day"])
+# plt.savefig("images/day_mismatch_corrected.jpeg", dpi=300)
+# plt.show()
 
 ##################
 # PREPARING DATA #
 ##################
+
+print(train_df.skew())
 
 
 def add_features(df) -> pd.DataFrame:
@@ -180,6 +215,8 @@ def add_features(df) -> pd.DataFrame:
 
     df["temp_range"] = df["maxtemp"] - df["mintemp"]
 
+    df["cloud_log"] = np.log1p(df["cloud"])
+
     return df
 
 
@@ -191,7 +228,7 @@ test["sunshine_cloud"].replace(np.inf, 0, inplace=True)
 stats = ["mean", "median"]
 
 group = "day"
-cols = ["cloud", "humidity", "temparature"]
+cols = ["cloud", "humidity", "sunshine"]
 
 for col in cols:
     train_rain_stats = train.groupby(group)[col].agg(stats).reset_index()
@@ -211,8 +248,6 @@ def onehot(df) -> pd.DataFrame:
     return df
 
 
-# corr_matrix = train.corr()
-
 # plt.figure(figsize=(12, 12))
 # sns.heatmap(
 #     data=corr_matrix,
@@ -222,19 +257,27 @@ def onehot(df) -> pd.DataFrame:
 # plt.savefig("images/corr_matrix.jpeg", dpi=300)
 # plt.show()
 
-cols_to_drop = [
-    "day", "windspeed", "dewpoint",
-    "mintemp", "maxtemp", "pressure"
-]
-
-train = train.drop(columns=cols_to_drop)
-test = test.drop(columns=cols_to_drop)
-
 num_cols = train.select_dtypes(exclude="object").columns.tolist()
 num_cols.remove("rainfall")
 
 for df in [train, test]:
     df = onehot(df)
+
+selected_features = train.columns.tolist()
+
+corr_matrix = train.corr().abs()
+
+upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
+high_correlation = [column for column in upper.columns if any(upper[column] > 0.85)]
+
+final_features = [f for f in selected_features if f not in high_correlation]
+
+train = train[final_features]
+final_features.remove(target)
+test = test[final_features]
+
+num_cols = train.select_dtypes(exclude="object").columns.tolist()
+num_cols.remove("rainfall")
 
 X_train, y_train = train.drop(target, axis=1), train[target]
 
@@ -255,9 +298,17 @@ logreg_model = LogisticRegression(
     solver='liblinear'
 )
 
+svc_model = SVC(
+    kernel="linear",
+    probability=True,
+    class_weight="balanced",
+    random_state=random_state
+)
+
 tsvc = TimeSeriesSplit(n_splits=5)
 
-roc_auc_scores = []
+roc_auc_scores_logreg = []
+roc_auc_scores_svc = []
 
 fold = 1
 
@@ -266,21 +317,33 @@ for train_idx, val_idx in tsvc.split(X_train):
     y_train_fold, y_val_fold = y_train.iloc[train_idx], y_train.iloc[val_idx]
 
     logreg_model.fit(X_train_fold, y_train_fold)
+    svc_model.fit(X_train_fold, y_train_fold)
 
-    pred_val = logreg_model.predict_proba(X_val_fold)[:, 1]
-    pred_val = (pred_val >= treshold).astype("int")
+    pred_val_logreg = logreg_model.predict_proba(X_val_fold)[:, 1]
+    pred_val_logreg = (pred_val_logreg >= treshold).astype("int")
 
-    roc_auc = roc_auc_score(y_true=y_val_fold, y_score=pred_val)
-    roc_auc_scores.append(roc_auc)
+    pred_val_svc = svc_model.predict_proba(X_val_fold)[:, 1]
+    pred_val_svc = (pred_val_svc >= treshold).astype("int")
 
-    print(f"Fold {fold} - ROC-AUC: {roc_auc:.4f}")
-    print(classification_report(y_val_fold, pred_val))
+    roc_auc_logreg = roc_auc_score(y_true=y_val_fold, y_score=pred_val_logreg)
+    roc_auc_scores_logreg.append(roc_auc_logreg)
+
+    roc_auc_svc = roc_auc_score(y_true=y_val_fold, y_score=pred_val_svc)
+    roc_auc_scores_logreg.append(roc_auc_svc)
+
+    print(f"Fold {fold} - ROC-AUC Logreg: {roc_auc_logreg:.4f}")
+    print(classification_report(y_val_fold, pred_val_logreg))
+    print("=" * 60)
+
+    print(f"Fold {fold} - ROC-AUC SVC: {roc_auc_svc:.4f}")
+    print(classification_report(y_val_fold, pred_val_svc))
     print("=" * 60)
 
     fold += 1
 
 
-print(f"Corss-Val score: {np.mean(roc_auc_scores):.4f}")
+print(f"Corss-Val score: {np.mean(roc_auc_scores_logreg):.4f}")
+print(f"Corss-Val score: {np.mean(roc_auc_scores_svc):.4f}")
 
 # pred_test = logreg_model.predict_proba(test)[:, 1]
 # pred_test = (pred_test >= treshold).astype("int")
