@@ -3,9 +3,9 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import roc_auc_score
-from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split, TimeSeriesSplit
+from sklearn.metrics import roc_auc_score, classification_report
+from sklearn.preprocessing import MinMaxScaler
 from sklearn.linear_model import LogisticRegression
 
 from datetime import datetime
@@ -15,15 +15,15 @@ pd.set_option('display.max_columns', None)
 
 # Reading data
 train_df = pd.read_csv("train.csv")
-train_df = train_df.drop("id", axis=1)
+# train_df = train_df.drop("id", axis=1)
 
 test_df = pd.read_csv("test.csv")
 idx = test_df["id"]
 test_df = test_df.drop("id", axis=1)
 
 target = "rainfall"
-
 random_state = 42
+treshold = 0.5
 
 #################
 # DATA ANALYSIS #
@@ -100,29 +100,36 @@ colors = sns.color_palette("tab10")
 # plt.savefig("images/target.jpeg", dpi=300)
 # plt.show()
 
+# fig, axes = plt.subplots(
+#     nrows=6,
+#     ncols=2,
+#     figsize=(12, 20)
+# )
+
+# axes = axes.flat
+
+# for i, (ax, col) in enumerate(zip(axes, num_cols)):
+#     sns.boxplot(
+#         data=train_df,
+#         x=col,
+#         ax=ax,
+#         color=colors[i % len(colors)],
+#     )
+
+# plt.tight_layout()
+# plt.savefig("images/boxplots.jpeg", dpi=300)
+# plt.show()
+
+plt.figure(figsize=(20, 16))
+plt.plot(train_df["id"], train_df["day"])
+plt.show()
+
 ##################
 # PREPARING DATA #
 ##################
 
-train_df_modified = train_df.copy()
 
-train_base, eval_base = train_test_split(
-    train_df,
-    train_size=0.8,
-    random_state=random_state
-)
-
-# for col in num_cols:
-#     train_df_modified[f"{col}_bin"] = pd.qcut(train_df_modified[col], q=5, labels=False)
-
-train, eval = train_test_split(
-    train_df_modified,
-    train_size=0.8,
-    random_state=random_state
-)
-
-
-def generate_months(df) -> pd.DataFrame:
+def add_features(df) -> pd.DataFrame:
     days_in_months = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
 
     cum_days = [sum(days_in_months[:i+1]) for i in range(len(days_in_months))]
@@ -137,19 +144,53 @@ def generate_months(df) -> pd.DataFrame:
         right=True
     )
 
+    df["day_sin"] = np.sin(2 * np.pi * df["day"] / 365)
+    df["day_cos"] = np.cos(2 * np.pi * df["day"] / 365)
+
+    df["cloud_lag1"] = df["cloud"].shift(-1).fillna(0)
+    df["temp_lag1"] = df["temparature"].shift(-1).fillna(0)
+    df["sunshine_lag1"] = df["sunshine"].shift(-1).fillna(0)
+
+    df["cloud_roll_14"] = df["cloud"].rolling(
+        window=14,
+        min_periods=1
+    ).mean().bfill()
+
+    df["temp_roll_14"] = df["temparature"].rolling(
+        window=14,
+        min_periods=1
+    ).mean().bfill()
+
+    df["sunshine_roll_14"] = df["sunshine"].rolling(
+        window=14,
+        min_periods=1
+    ).mean().bfill()
+
+    df["cloud_humidity"] = (df["cloud"] * df["humidity"]).fillna(0)
+    df["sunshine_cloud"] = (df["sunshine"] / df["cloud"] + 1e-4).fillna(0)
+
+    df["cloud_day_sin"] = np.sin(2 * df["day"] / 365 * df["cloud"] * np.pi)
+    df["cloud_day_cos"] = np.cos(2 * df["day"] / 365 * df["cloud"] * np.pi)
+
+    df["sunshine_day_sin"] = np.sin(2 * df["day"] / 365 * df["sunshine"] * np.pi)
+    df["sunshine_day_cos"] = np.cos(2 * df["day"] / 365 * df["sunshine"] * np.pi)
+
+    df["humidity_day_sin"] = np.sin(2 * df["day"] / 365 * df["humidity"] * np.pi)
+    df["humidity_day_cos"] = np.cos(2 * df["day"] / 365 * df["humidity"] * np.pi)
+
+    df["temp_range"] = df["maxtemp"] - df["mintemp"]
+
     return df
 
 
-# train_df_modified["temp_range"] = train_df_modified["maxtemp"] - train_df_modified["mintemp"]
-# test_df["temp_range"] = test_df["maxtemp"] - test_df["mintemp"]
+train = add_features(train_df)
+test = add_features(test_df)
 
-train = generate_months(train)
-eval = generate_months(eval)
-test = generate_months(test_df)
+test["sunshine_cloud"].replace(np.inf, 0, inplace=True)
 
 stats = ["mean", "median"]
 
-group = "month"
+group = "day"
 cols = ["cloud", "humidity", "temparature"]
 
 for col in cols:
@@ -157,7 +198,6 @@ for col in cols:
     train_rain_stats.columns = [group] + [f"{group}_{col}_{stat}" for stat in stats]
 
     train = train.merge(train_rain_stats, on=group, how="left")
-    eval = eval.merge(train_rain_stats, on=group, how="left")
     test = test.merge(train_rain_stats, on=group, how="left")
 
 
@@ -171,156 +211,89 @@ def onehot(df) -> pd.DataFrame:
     return df
 
 
-train = onehot(train)
-eval = onehot(eval)
-test = onehot(test)
+# corr_matrix = train.corr()
 
+# plt.figure(figsize=(12, 12))
+# sns.heatmap(
+#     data=corr_matrix,
+#     cmap="coolwarm"
+# )
+# plt.tight_layout()
+# plt.savefig("images/corr_matrix.jpeg", dpi=300)
+# plt.show()
 
-def create_group_features(df, train_df=None, combo_list=None, stats=None):
-    if train_df is None:
-        train_df = df
+cols_to_drop = [
+    "day", "windspeed", "dewpoint",
+    "mintemp", "maxtemp", "pressure"
+]
 
-    new_features = []
+train = train.drop(columns=cols_to_drop)
+test = test.drop(columns=cols_to_drop)
 
-    for col in combo_list:
-        if isinstance(col, str):
-            group_cols = [col]
+num_cols = train.select_dtypes(exclude="object").columns.tolist()
+num_cols.remove("rainfall")
 
-        group_stats = train_df.groupby(list(group_cols)).agg({
-            "humidity": stats,
-            "cloud": stats,
-            "pressure": stats
-        })
-
-        group_stats.columns = [
-            f"{"_".join(group_cols)}_{col[0]}_{col[1]}" for col in group_stats.columns
-        ]
-        group_stats.reset_index()
-
-        df = df.merge(group_stats, on=list(group_cols), how="left")
-        new_features += list(group_stats.columns[len(group_cols):])
-
-    return df, new_features
-
-
-stats = ["mean", "median", "std"]
-
-combos = ["day"]
-
-# train, new_features = create_group_features(train, combo_list=combos, stats=stats)
-# eval, _ = create_group_features(eval, train_df=train,  combo_list=combos, stats=stats)
-# test, _ = create_group_features(test_df, train_df=train, combo_list=combos, stats=stats)
-
-X_train_base, y_train_base = train_base.drop(target, axis=1), train_base[target]
-X_eval_base, y_eval_base = eval_base.drop(target, axis=1), eval_base[target]
+for df in [train, test]:
+    df = onehot(df)
 
 X_train, y_train = train.drop(target, axis=1), train[target]
-X_eval, y_eval = eval.drop(target, axis=1), eval[target]
 
-ss = StandardScaler()
+mms = MinMaxScaler()
 
-X_train[num_cols] = ss.fit_transform(X_train[num_cols], y_train)
-X_eval[num_cols] = ss.transform(X_eval[num_cols])
-test[num_cols] = ss.transform(test[num_cols])
+X_train[num_cols] = mms.fit_transform(X_train[num_cols], y_train)
+test[num_cols] = mms.transform(test[num_cols])
 
 ########################
 # TRAINING AND TESTING #
 ########################
 
-# model_XGB_base = XGBClassifier(
-#     n_estimators=10000,
-#     learning_rate=0.02,
-#     max_depth=6,
-#     subsample=0.8,
-#     colsample_bytree=0.5,
-#     early_stopping_rounds=100,
-#     eval_metric='auc',
-#     device='cuda',
-#     random_state=random_state
-# )
-
-logreg_model_base = LogisticRegression(
-    max_iter=1000,
-    random_state=42,
-    penalty='l2',
-    class_weight='balanced',
-    solver='liblinear'
-)
-
-# eval_set_base = [(X_eval_base, y_eval_base)]
-
-# model_XGB_base.fit(X_train_base, y_train_base, eval_set=eval_set_base)
-logreg_model_base.fit(X_train_base, y_train_base)
-
-# model_XGB = XGBClassifier(
-#     n_estimators=10000,
-#     learning_rate=0.02,
-#     max_depth=6,
-#     subsample=0.8,
-#     colsample_bytree=0.5,
-#     early_stopping_rounds=100,
-#     eval_metric='auc',
-#     device='cuda',
-#     random_state=random_state
-# )
-
 logreg_model = LogisticRegression(
     max_iter=1000,
-    random_state=42,
+    random_state=random_state,
     penalty='l2',
     class_weight='balanced',
     solver='liblinear'
 )
 
-# eval_set = [(X_eval, y_eval)]
+tsvc = TimeSeriesSplit(n_splits=5)
 
-# model_XGB.fit(X_train, y_train, eval_set=eval_set)
-logreg_model.fit(X_train, y_train)
+roc_auc_scores = []
 
-# pred_base = model_XGB_base.predict(X_eval_base)
-# pred = model_XGB.predict(X_eval)
+fold = 1
 
-pred_base = logreg_model_base.predict_proba(X_eval_base)[:, 1]
-pred = logreg_model.predict_proba(X_eval)[:, 1]
+for train_idx, val_idx in tsvc.split(X_train):
+    X_train_fold, X_val_fold = X_train.iloc[train_idx], X_train.iloc[val_idx]
+    y_train_fold, y_val_fold = y_train.iloc[train_idx], y_train.iloc[val_idx]
 
-pred_base = (pred_base >= 0.6).astype("int")
-pred = (pred >= 0.6).astype("int")
+    logreg_model.fit(X_train_fold, y_train_fold)
 
-roc_auc_XGB_base = roc_auc_score(y_true=y_eval_base, y_score=pred_base)
-roc_auc_XGB = roc_auc_score(y_true=y_eval, y_score=pred)
+    pred_val = logreg_model.predict_proba(X_val_fold)[:, 1]
+    pred_val = (pred_val >= treshold).astype("int")
 
-# feature_importance = model_XGB.get_booster().get_score(importance_type="weight")
+    roc_auc = roc_auc_score(y_true=y_val_fold, y_score=pred_val)
+    roc_auc_scores.append(roc_auc)
 
-# importance_df = pd.DataFrame({
-#     'feature': list(feature_importance.keys()),
-#     'importance': list(feature_importance.values())
-# }).sort_values('importance', ascending=False)
+    print(f"Fold {fold} - ROC-AUC: {roc_auc:.4f}")
+    print(classification_report(y_val_fold, pred_val))
+    print("=" * 60)
 
-# plt.figure(figsize=(12, 16))
-# sns.barplot(x='importance', y='feature', data=importance_df.head(50))
-# plt.title(f'Top {len(X_train.columns)} Feature Importance')
-# plt.show()
-
-# print("=" * 30)
-# print(f"XGB baseline AUC-ROC: {roc_auc_XGB_base:.4f} \nXGB modified AUC-ROC: {roc_auc_XGB:.4f}")
-# print("=" * 30)
+    fold += 1
 
 
-print(f"LogReg baseline AUC-ROC: {roc_auc_XGB_base:.4f} \nLogReg modified AUC-ROC: {roc_auc_XGB:.4f}")
+print(f"Corss-Val score: {np.mean(roc_auc_scores):.4f}")
 
-# pred_test = model_XGB.predict(test)
-pred_test = logreg_model.predict_proba(test)[:, 1]
-pred_test = (pred_test >= 0.6).astype("int")
+# pred_test = logreg_model.predict_proba(test)[:, 1]
+# pred_test = (pred_test >= treshold).astype("int")
 
-submission = pd.DataFrame({
-    "id": idx,
-    target: pred_test
-})
+# submission = pd.DataFrame({
+#     "id": idx,
+#     target: pred_test
+# })
 
-submission.to_csv(
-    f"submissions/submission_{
-        datetime.now().strftime("%Y%m%d_%H%M%S")
-    }.csv",
-    index=False
-)
+# submission.to_csv(
+#     f"submissions/submission_{
+#         datetime.now().strftime("%Y%m%d_%H%M%S")
+#     }.csv",
+#     index=False
+# )
 
