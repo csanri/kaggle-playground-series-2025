@@ -2,10 +2,11 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import optuna
 
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler, LabelEncoder
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, log_loss
 
 from scipy.stats import chi2_contingency
 
@@ -17,9 +18,12 @@ pd.set_option('display.max_columns', None)
 colors = sns.color_palette("tab10")
 
 random_state = 42
+opt_iter = 50
 
 train_df = pd.read_csv("playground-series-s5e6/train.csv")
 train_df = train_df.drop("id", axis=1)
+
+test_df = pd.read_csv("playground-series-s5e6/test.csv")
 
 target = "Fertilizer Name"
 
@@ -191,17 +195,41 @@ cat_cols.remove(target)
 # FEATURE ENGINEERING #
 #######################
 
-# Making relation between the environmetal
-# variables and the gas data
-for env in ["Temparature", "Humidity", "Moisture"]:
-    for gas in ["Nitrogen", "Potassium", "Phosphorous"]:
-        train_df[f"{gas}_{env}_ratio"] = train_df[gas] / train_df[env]
+
+def feature_engineering(df) -> pd.DataFrame:
+    # Making relation between the environmetal
+    # variables and the gas data
+    for env in ["Temparature", "Humidity", "Moisture"]:
+        for gas in ["Nitrogen", "Potassium", "Phosphorous"]:
+            df[f"{gas}_{env}_ratio"] = df[gas] / df[env]
+
+    df["Crop_Moisture"] = df["Crop Type"].astype("str") \
+        + "_" + df["Moisture"].astype("str")
+
+    df["Crop_Soil"] = df["Crop Type"].astype("str") \
+        + "_" + df["Soil Type"].astype("str")
+
+    df["Crop_Humidity"] = df["Crop Type"].astype("str") \
+        + "_" + df["Humidity"].astype("str")
+
+    df["Moisture_Crop_Soil"] = df["Crop Type"].astype("str") \
+        + "_" + df["Moisture"].astype("str") \
+        + "_" + df["Soil Type"]
+
+    return df
+
+
+train_df = feature_engineering(test_df)
+test_df = feature_engineering(test_df)
+
+cat_cols = train_df.select_dtypes(include="object")
 
 # Label Encoding categorical features
 le = LabelEncoder()
 
 for col in cat_cols:
     train_df[col] = le.fit_transform(train_df[col])
+    test_df[col] = le.transform(test_df[col])
 
 ######
 
@@ -216,6 +244,7 @@ scaler = MinMaxScaler()
 
 train[num_cols] = scaler.fit_transform(train[num_cols])
 eval[num_cols] = scaler.transform(eval[num_cols])
+test_df[num_cols] = scaler.transform(test_df[num_cols])
 
 X_train, y_train = train.drop(target, axis=1), train[target]
 X_eval, y_eval = eval.drop(target, axis=1), eval[target]
@@ -242,5 +271,60 @@ feature_importance = pd.DataFrame(
     }
 ).sort_values(by="Feature Importance", ascending=False)
 
-print(feature_importance)
+
+def objective_CAT(trial) -> float:
+    params = {
+        'objective': "MultiClass",  # For classification
+        'iterations': trial.suggest_int('iterations', 100, 2000),
+        'learning_rate': trial.suggest_float(
+            'learning_rate', 1e-3, 0.1, log=True
+        ),
+        'depth': trial.suggest_int('depth', 2, 10),
+        'colsample_bylevel': trial.suggest_float(
+            'colsample_bylevel', 0.05, 1.0
+        ),
+        'l2_leaf_reg': trial.suggest_float(
+            'l2_leaf_reg', 1e-3, 10.0, log=True
+        ),
+        'random_strength': trial.suggest_float(
+            'random_strength', 1e-5, 10.0, log=True
+        ),
+        'early_stopping_rounds': trial.suggest_int(
+            'early_stopping_rounds', 10, 100
+        ),
+        'verbose': False,
+        'random_state': 42,
+        'auto_class_weights': 'Balanced',
+        'loss_function': 'MultiClass',
+    }
+
+    model = CatBoostClassifier(**params)
+    model.fit(
+        X_train,
+        y_train,
+        eval_set=(X_eval, y_eval),
+        use_best_model=True,
+    )
+
+    y_pred_proba = model.predict_proba(X_eval)
+
+    metric = log_loss(y_eval, y_pred_proba)
+
+    print(f"Trial {trial.number}: Log Loss = {metric:.5f}")
+
+    return metric
+
+
+study_CAT = optuna.create_study(
+    direction='minimize',
+    pruner=optuna.pruners.MedianPruner()
+)
+study_CAT.optimize(objective_CAT, n_trials=opt_iter)
+
+model_CAT = CatBoostClassifier(
+    **study_CAT.best_params,
+)
+model_CAT.fit(X_train, y_train)
+
+y_pred = model_CAT.predict_proba(X_eval)
 
